@@ -1,4 +1,3 @@
-finnhub-python
-pyTelegramBotAPI
 requests
-pytz
+pyTelegramBotAPI
+Flask
