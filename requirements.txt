@@ -1,0 +1,4 @@
+finnhub-python
+pyTelegramBotAPI
+requests
+pytz
