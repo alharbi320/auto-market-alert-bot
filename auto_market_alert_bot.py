@@ -3,21 +3,18 @@ import os, time, json, threading, requests, math
 from datetime import datetime, timedelta
 import pytz
 import telebot
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# ========= ENVIRONMENT =========
+# ========= إعدادات البوت =========
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU")
 CHAT_ID          = os.getenv("CHAT_ID", "997530834")
 FINNHUB_API      = os.getenv("FINNHUB_API", "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg")
 
-# إعدادات الفاصل الزمني ومعدل API
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "10"))
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "50"))
-
-# حدود التنبيه
-DAILY_RISE_PCT          = float(os.getenv("DAILY_RISE_PCT", "15"))
-MOMO_PRICE_5M_PCT       = float(os.getenv("MOMO_PRICE_5M_PCT", "5"))
-MOMO_VOL_SPIKE_FACTOR   = float(os.getenv("MOMO_VOL_SPIKE_FACTOR", "2"))
-
+DAILY_RISE_PCT    = float(os.getenv("DAILY_RISE_PCT", "15"))
+MOMO_PRICE_5M_PCT = float(os.getenv("MOMO_PRICE_5M_PCT", "5"))
+MOMO_VOL_SPIKE_FACTOR = float(os.getenv("MOMO_VOL_SPIKE_FACTOR", "2"))
 STATE_FILE = os.getenv("STATE_FILE", "auto_stock_state.json")
 TZ_NY = pytz.timezone("America/New_York")
 
@@ -28,11 +25,10 @@ STATE = {
     "symbols_queue": [],
     "alerted_day": {},
     "alerted_momo": {},
-    "last_news_key": {},
     "symbols_loaded_for_date": ""
 }
 
-# ================= Helpers =================
+# ========= أدوات مساعدة =========
 def ny_now():
     return datetime.now(TZ_NY)
 
@@ -143,7 +139,7 @@ def already_alerted(bucket, symbol):
     d = today_key_ny()
     return STATE.get(bucket, {}).get(d, {}).get(symbol, False)
 
-# ================= Alerts =================
+# ========= منطق التنبيهات =========
 def check_daily_15pct(symbol, q):
     c, pc = q.get("c", 0), q.get("pc", 0)
     if not pc or pc <= 0: return
@@ -186,20 +182,19 @@ def process_symbol(symbol):
         if news: msg += "\n\n" + news
         bot.send_message(CHAT_ID, msg)
 
-# ================= Scanner =================
+# ========= حلقة المراقبة =========
 def scanner_loop():
     while True:
         try:
             now_ny = ny_now()
-            weekday = now_ny.weekday()  # Monday=0, Sunday=6
-            # ⏸️ عطلة نهاية الأسبوع
+            weekday = now_ny.weekday()  # Monday=0 ... Sunday=6
+            # عطلة نهاية الأسبوع
             if weekday >= 5:
-                print(f"⏸️ السوق مغلق ({now_ny.strftime('%A')}), النوم 6 ساعات...")
+                print(f"⏸️ السوق مغلق ({now_ny.strftime('%A')})، النوم 6 ساعات...")
                 time.sleep(6 * 3600)
                 continue
 
             ensure_symbols_loaded_daily()
-
             cycles_per_min = max(1, math.floor(60 / INTERVAL_SECONDS))
             per_cycle = max(1, RATE_LIMIT_PER_MIN // cycles_per_min)
 
@@ -225,15 +220,16 @@ def scanner_loop():
         except Exception:
             time.sleep(INTERVAL_SECONDS)
 
-# ================= Bot Commands =================
+# ========= أوامر التلغرام =========
 @bot.message_handler(commands=["start","help"])
 def cmd_start(message):
     bot.reply_to(message,
         "👋 أهلاً! أنا *auto-market-alert-bot* (Stocks Only)\n"
         f"• تنبيه إذا ارتفع السهم ≥ *{DAILY_RISE_PCT:.0f}%* خلال اليوم\n"
         f"• تنبيه الزخم اللحظي (قفزة ≥{MOMO_PRICE_5M_PCT:.0f}% بفوليوم ≥{MOMO_VOL_SPIKE_FACTOR:.1f}x)\n"
-        "• أرسل رمز السهم (مثل: AAPL / WGRX) للحصول على السعر + التغير + آخر خبر إيجابي.\n"
-        "• البوت يتوقف تلقائيًا السبت والأحد ويستأنف الاثنين ✅"
+        "• أرسل رمز السهم (مثل: AAPL / WGRX) للحصول على السعر + آخر خبر إيجابي.\n"
+        "• يتوقف تلقائيًا السبت والأحد.\n"
+        "• مدعوم بالـ Ping من UptimeRobot لإبقائه شغال دائمًا 🔁"
     )
 
 @bot.message_handler(func=lambda m: True, content_types=['text'])
@@ -255,7 +251,7 @@ def on_text(message):
         lines.append("\n" + news)
     bot.reply_to(message, "\n".join(lines))
 
-# ================= MAIN =================
+# ========= التشغيل الرئيسي =========
 def start_threads():
     t = threading.Thread(target=scanner_loop, daemon=True)
     t.start()
@@ -263,4 +259,20 @@ def start_threads():
 if __name__ == "__main__":
     print("✅ auto-market-alert-bot running (stocks only)…")
     start_threads()
+
+    # 🌐 خادم صغير لإبقاء الخدمة نشطة في Render (UptimeRobot)
+    class PingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"Bot is alive!")
+
+    def run_server():
+        port = int(os.environ.get("PORT", 8080))
+        server = HTTPServer(("", port), PingHandler)
+        print(f"🌐 Web ping server running on port {port}")
+        server.serve_forever()
+
+    threading.Thread(target=run_server, daemon=True).start()
     bot.infinity_polling(timeout=60, long_polling_timeout=50)
