@@ -8,10 +8,11 @@ import requests
 import telebot
 import threading
 from flask import Flask
+import re
 
 # ===================== TELEGRAM SETTINGS =====================
-TELEGRAM_BOT_TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
-CHAT_ID = "997530834"  # حسابك الشخصي
+TELEGRAM_BOT_TOKEN = "7066289132:AAFy8ha8gEmPgTxW07i8b5wlVLv3HLu3Vmg"
+CHAT_ID = "997530834"  # رقمك الشخصي
 # ============================================================
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
@@ -26,19 +27,23 @@ def home():
 def run():
     app.run(host='0.0.0.0', port=8080)
 
-# تشغيل Flask في خيط (Thread) منفصل حتى لا يوقف البوت
+# تشغيل Flask في خيط منفصل
 threading.Thread(target=run).start()
 # ============================================================
 
 
 # ===================== FUNCTION TO GET NEWS =====================
 def get_stock_news(symbol):
-    """جلب الأخبار من Yahoo Finance"""
-    url = f"https://query1.finance.yahoo.com/v1/finance/search?q={symbol}"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return f"🔔 آخر الأخبار عن {symbol}: تحقق من موقع Yahoo Finance 📈"
+        rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
+        response = requests.get(rss_url, timeout=10)
+        if response.status_code == 200 and "<item>" in response.text:
+            titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", response.text)
+            if len(titles) > 1:
+                latest = titles[1]  # أول خبر بعد العنوان العام
+                return f"📰 آخر خبر عن {symbol}:\n{latest}\n\n📍المصدر: Yahoo Finance"
+            else:
+                return f"ℹ️ لم أجد أخبارًا حديثة عن {symbol}."
         else:
             return f"⚠️ لم أستطع جلب الأخبار عن {symbol} (رمز الاستجابة: {response.status_code})"
     except Exception as e:
@@ -49,8 +54,7 @@ def get_stock_news(symbol):
 # ===================== BOT COMMANDS =====================
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "👋 أهلاً بك في بوت الأخبار!\n"
-                          "أرسل لي رمز السهم مثل: `WGRX` لأجلب لك آخر الأخبار 🔍")
+    bot.reply_to(message, "👋 أهلاً بك! أرسل رمز السهم مثل: `WGRX` لأجلب لك آخر الأخبار.")
 
 @bot.message_handler(func=lambda msg: True)
 def stock_handler(message):
@@ -61,17 +65,15 @@ def stock_handler(message):
 # ============================================================
 
 
-# ===================== RUN BOT =====================
+# ===================== RUN BOT (With 409 fix) =====================
 def run_bot():
-    """تشغيل بوت التليجرام مع إعادة المحاولة عند الانقطاع"""
     while True:
         try:
             print("✅ Bot is running...")
-            bot.polling(none_stop=True, interval=3)
+            bot.polling(none_stop=True, interval=3, timeout=30)
         except Exception as e:
             print(f"⚠️ Error: {e}")
             time.sleep(5)
 
-# تشغيل البوت في خيط منفصل (حتى لا يتعارض مع Flask)
 threading.Thread(target=run_bot).start()
 # ============================================================
