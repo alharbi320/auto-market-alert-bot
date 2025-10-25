@@ -1,3 +1,4 @@
 requests
 pyTelegramBotAPI
 Flask
+finnhub-python
