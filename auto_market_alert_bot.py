@@ -11,7 +11,7 @@ from flask import Flask
 import re
 
 # ===================== TELEGRAM SETTINGS =====================
-TELEGRAM_BOT_TOKEN = "7066289132:AAFy8ha8gEmPgTxW07i8b5wlVLv3HLu3Vmg"
+TELEGRAM_BOT_TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
 CHAT_ID = "997530834"  # رقمك الشخصي
 # ============================================================
 
@@ -77,3 +77,4 @@ def run_bot():
 
 threading.Thread(target=run_bot).start()
 # ============================================================
+
