@@ -5,14 +5,15 @@ from datetime import datetime, timedelta
 import pytz
 
 # ========= إعدادات البوت =========
-TOKEN = "ضع_توكن_البوت_هنا"         # ← ضع التوكن من @BotFather
-CHANNEL_ID = "@kaaty320"             # ← اسم القناة العامة
-API_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"  # مفتاح Finnhub
-CHECK_INTERVAL = 60                  # كل 60 ثانية
-RISE_ALERT = 15                      # نسبة الارتفاع للتنبيه
-DROP_ALERT = -10                     # نسبة الهبوط للتنبيه
+TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"  # ← تم إدخال التوكن الصحيح هنا
+CHANNEL_ID = "@kaaty320"       # ← اسم القناة العامة
+API_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"  # مفتاح Finnhub لجلب الأخبار
+CHECK_INTERVAL = 60            # كل كم ثانية يتحقق من الأسهم
+RISE_ALERT = 15                # النسبة المئوية للارتفاع القوي
+DROP_ALERT = -10               # النسبة المئوية للهبوط القوي
+
 bot = telebot.TeleBot(TOKEN)
-last_alerts = {}
+last_alerts = {}               # لمنع تكرار التنبيهات
 
 # ========= دالة جلب السعر والتغير =========
 def get_quote(symbol):
@@ -44,20 +45,21 @@ def get_latest_news(symbol):
         print(f"⚠️ خطأ في جلب الأخبار لـ {symbol}: {e}")
         return "📰 <b>آخر خبر:</b> تعذر الحصول على البيانات."
 
-# ========= إرسال التنبيه مع منع التكرار =========
+# ========= إرسال التنبيه للقناة =========
 def send_alert(symbol, message):
     if last_alerts.get(symbol) == message:
         return
     last_alerts[symbol] = message
     bot.send_message(CHANNEL_ID, message, parse_mode="HTML")
 
-# ========= تنسيق رسالة التنبيه =========
+# ========= إنشاء الرسالة بالعربية =========
 def make_message(symbol, price, change, news):
     now_us = datetime.now(pytz.timezone("US/Eastern")).strftime("%H:%M:%S")
     الاتجاه = "🚀 ارتفاع قوي" if change > 0 else "📉 هبوط حاد"
     نوع = "📊 زخم لحظي" if abs(change) < 15 else "⚡ تحرك كبير"
+    رمز = "🔔" if change > 0 else "⚠️"
     msg = (
-        f"<b>📈 الرمز:</b> {symbol}\n"
+        f"{رمز} <b>الرمز:</b> {symbol}\n"
         f"<b>{الاتجاه}</b>\n"
         f"<b>💹 نسبة التغير:</b> {change:+.2f}%\n"
         f"<b>💰 السعر الحالي:</b> {price} دولار\n"
@@ -67,7 +69,7 @@ def make_message(symbol, price, change, news):
     )
     return msg
 
-# ========= مراقبة مستمرة =========
+# ========= المراقبة =========
 def monitor():
     watchlist = ["CASI", "RANI", "WGRX", "TPET", "NERV", "AAPL"]
     while True:
@@ -82,5 +84,5 @@ def monitor():
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    print("🚀 البوت بدأ المراقبة وإرسال التنبيهات مع الأخبار إلى القناة...")
+    print("🚀 البوت بدأ المراقبة وإرسال التنبيهات إلى القناة...")
     monitor()
