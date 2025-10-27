@@ -13,7 +13,7 @@ TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
 CHANNEL_ID = "@kaaty320"
 FINNHUB_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
 
-MARKET_MICS = {"XNAS", "XNYS", "XASE"}
+MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ, NYSE, AMEX
 UP_CHANGE_PCT = 20
 MIN_PRICE = 1.0
 CHECK_INTERVAL_SEC = 60
@@ -25,7 +25,6 @@ last_sent, _daily_counts = {}, {}
 
 # ==================== Finnhub API ====================
 def fh_get_symbols_us():
-    """جلب رموز الأسهم الأمريكية"""
     url = "https://finnhub.io/api/v1/stock/symbol"
     try:
         r = requests.get(url, params={"exchange": "US", "token": FINNHUB_KEY}, timeout=25)
@@ -33,7 +32,7 @@ def fh_get_symbols_us():
         data = r.json()
         syms = [x["symbol"] for x in data if (x.get("mic") or "").upper() in MARKET_MICS]
         print(f"[INIT] Loaded {len(syms)} total symbols.")
-        return random.sample(syms, 200)  # نختار 200 عشوائيًا لتقليل الضغط
+        return random.sample(syms, 200)
     except Exception as e:
         print("fh_get_symbols_us error:", e)
         return ["AAPL", "TSLA", "NVDA", "AMZN"]
@@ -82,7 +81,7 @@ def send_alert(symbol, price, dp):
 # ==================== الحلقة الرئيسية ====================
 def main_loop():
     syms = fh_get_symbols_us()
-    bot.send_message(CHANNEL_ID, "🟢 بدأ وضع التتبع — مراقبة الأسهم فوق 20% (Debug Mode)")
+    bot.send_message(CHANNEL_ID, "🟢 بدأ البوت — مراقبة الأسهم فوق 20% (NASDAQ / NYSE / AMEX)")
     per_cycle = 50
 
     while True:
@@ -95,23 +94,16 @@ def main_loop():
                 q = fh_quote(s)
                 price = q.get("c", 0)
                 dp = q.get("dp", None)
-
-                # نحسب النسبة يدويًا لو ناقصة
                 if (dp is None or dp == 0) and q.get("pc", 0) > 0:
                     dp = ((price - q["pc"]) / q["pc"]) * 100
-
-                # نعرض في اللوج كل سهم فوق 10%
                 if dp and dp >= 10:
                     print(f"[DEBUG] {s} → {dp:+.2f}% @ {price:.2f}$")
-
-                # نرسل فقط إذا فوق 20% وسعره فوق 1$
                 if dp and dp >= UP_CHANGE_PCT and price >= MIN_PRICE:
                     last_t = last_sent.get(s, 0)
                     if time.time() - last_t >= REPEAT_COOLDOWN_S:
                         send_alert(s, price, dp)
                         last_sent[s] = time.time()
                         alerts += 1
-
                 checked += 1
             except Exception as e:
                 print("Error on", s, ":", e)
@@ -125,13 +117,17 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Auto Market Alert Bot is running ✅ (Debug Mode)"
+    return "Auto Market Alert Bot is running ✅"
 
 def run_web():
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
 
+# ==================== تشغيل البوت ====================
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-    print("==> Debug mode starting...")
-    main_loop()
+    print("==> Service starting...")
+    # 🔥 هذا السطر المهم اللي يشغل الحلقة فعلاً
+    threading.Thread(target=main_loop, daemon=True).start()
+    while True:
+        time.sleep(60)
