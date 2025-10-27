@@ -1,14 +1,10 @@
 # -*- coding: utf-8 -*-
 import os
 import time
-import json
-import math
-import pytz
-import queue
-import signal
 import random
 import threading
 import requests
+import pytz
 from datetime import datetime, timedelta
 import telebot
 from flask import Flask
@@ -16,35 +12,35 @@ from flask import Flask
 # ========= الإعدادات العامة =========
 TOKEN       = os.getenv("BOT_TOKEN", "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU")
 CHANNEL_ID  = os.getenv("CHANNEL_ID", "@kaaty320")
-FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg")
 
-# أسواق التداول المطلوبة
+# مفاتيح Finnhub (يمكنك إضافة أكثر من مفتاح)
+FINNHUB_KEYS = [
+    "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
+]
+# يتم اختيار مفتاح عشوائي في كل دورة لتخفيف الضغط
+def get_key():
+    return random.choice(FINNHUB_KEYS)
+
 MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ, NYSE, AMEX
 
-# معايير التنبيه
-CHECK_INTERVAL_SEC = 60           # كل دقيقة
-UP_CHANGE_PCT      = 15           # تنبيه عند +15% أو أكثر
-MIN_VOL_15M        = 100_000      # حد أدنى لحجم تداول آخر 15 دقيقة
-MIN_DOLLAR_15M     = 200_000      # حد أدنى لقيمة التداول بالدولار (سعر * حجم) آخر 15 دقيقة
-REPEAT_COOLDOWN_S  = 15 * 60      # منع تكرار التنبيه لنفس السهم لمدة 15 دقيقة
-
-# المنطقة الزمنية للعرض
+CHECK_INTERVAL_SEC = 60      # كل دقيقة
+UP_CHANGE_PCT      = 15      # الحد الأدنى للارتفاع
+MIN_VOL_15M        = 100_000
+MIN_DOLLAR_15M     = 200_000
+REPEAT_COOLDOWN_S  = 15 * 60
 US_TZ = pytz.timezone("US/Eastern")
 
-# تليجرام بوت
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
-
-# لتتبع آخر ما أُرسل
-last_sent = {}  # symbol -> timestamp
+last_sent = {}
+_daily_counts = {}
 
 ###############################################################################
-#                                  أدوات Finnhub                              #
+#                            أدوات الاتصال بـ Finnhub                         #
 ###############################################################################
 
 def fh_get_symbols_us():
-    """جلب جميع رموز الأسهم الأمريكية ثم ترشيحها حسب الماركت ميك (MIC)."""
     url = "https://finnhub.io/api/v1/stock/symbol"
-    params = {"exchange": "US", "token": FINNHUB_KEY}
+    params = {"exchange": "US", "token": get_key()}
     try:
         r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
@@ -58,41 +54,33 @@ def fh_get_symbols_us():
         return sorted(set(syms))
     except Exception as e:
         print("fh_get_symbols_us error:", e)
-        return []
+        return ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT"]
 
 def fh_quote(symbol):
-    """جلب quote لسهم: السعر الحالي، نسبة التغير.. الخ"""
     url = "https://finnhub.io/api/v1/quote"
-    params = {"symbol": symbol, "token": FINNHUB_KEY}
+    params = {"symbol": symbol, "token": get_key()}
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     return r.json()
 
 def fh_candles_1m(symbol, frm, to):
-    """جلب شموع دقيقة (1m) للحصول على حجم التداول."""
     url = "https://finnhub.io/api/v1/stock/candle"
     params = {
         "symbol": symbol,
         "resolution": 1,
         "from": int(frm),
         "to": int(to),
-        "token": FINNHUB_KEY
+        "token": get_key()
     }
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
     return r.json()
 
 def fh_last_news(symbol, days=3):
-    """جلب أحدث خبر للسهم خلال آخر N أيام."""
     to_dt = datetime.utcnow().date()
     from_dt = to_dt - timedelta(days=days)
     url = "https://finnhub.io/api/v1/company-news"
-    params = {
-        "symbol": symbol,
-        "from": str(from_dt),
-        "to": str(to_dt),
-        "token": FINNHUB_KEY
-    }
+    params = {"symbol": symbol, "from": str(from_dt), "to": str(to_dt), "token": get_key()}
     try:
         r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
@@ -109,24 +97,19 @@ def fh_last_news(symbol, days=3):
         return "بدون خبر"
 
 ###############################################################################
-#                                 فلترة السهم                                 #
+#                           شروط الفلترة والإرسال                             #
 ###############################################################################
 
 def has_enough_momentum_and_liquidity(symbol, price, dp):
-    """تحقق الزخم والسيولة."""
-    if price is None or price <= 0:
+    if price <= 0 or dp < UP_CHANGE_PCT:
         return False, 0, 0
-    if dp is None or dp < UP_CHANGE_PCT:
-        return False, 0, 0
-
     now = int(datetime.utcnow().timestamp())
     frm = now - (15 * 60)
     try:
         candles = fh_candles_1m(symbol, frm, now)
         if candles.get("s") != "ok":
             return False, 0, 0
-        vols = candles.get("v", []) or []
-        vol_15m = sum(vols)
+        vol_15m = sum(candles.get("v", []))
         dollar_15m = vol_15m * float(price)
         if vol_15m >= MIN_VOL_15M and dollar_15m >= MIN_DOLLAR_15M:
             return True, vol_15m, dollar_15m
@@ -135,70 +118,51 @@ def has_enough_momentum_and_liquidity(symbol, price, dp):
         print("liquidity check error", symbol, e)
         return False, 0, 0
 
-###############################################################################
-#                               تنسيق وإرسال الرسالة                          #
-###############################################################################
-
 def fmt_us_time():
     try:
         return datetime.now(US_TZ).strftime("%I:%M:%S %p")
-    except Exception:
+    except:
         return datetime.utcnow().strftime("%H:%M:%S")
-
-def format_alert(symbol, price, dp, vol_15m, dollar_15m, news_text, count_today):
-    return (
-        f"▫️الرمز: <b>{symbol}</b>\n"
-        f"▫️نوع الزخم: 🚀 زخم شراء\n"
-        f"▫️نسبة التغير: <b>{dp:+.2f}%</b>\n"
-        f"▫️السعر الحالي: <b>{price:.2f}$</b>\n"
-        f"▫️حجم 15 دقيقة: <b>{vol_15m:,} سهم</b>\n"
-        f"▫️قيمة 15 دقيقة: <b>${int(dollar_15m):,}</b>\n"
-        f"▫️عدد مرات التنبيه اليوم: <b>{count_today}</b>\n"
-        f"▫️الخبر: {news_text}\n"
-        f"▫️⏰ التوقيت الأمريكي: {fmt_us_time()}"
-    )
 
 def send_alert(symbol, price, dp, vol_15m, dollar_15m):
     today = datetime.utcnow().date().isoformat()
     key = f"{symbol}:{today}"
     count_today = _daily_counts.get(key, 0) + 1
     _daily_counts[key] = count_today
-
-    news_text = fh_last_news(symbol, days=3)
-    msg = format_alert(symbol, price, dp, vol_15m, dollar_15m, news_text, count_today)
+    news_text = fh_last_news(symbol)
+    msg = (
+        f"▪️ الرمز: <b>{symbol}</b>\n"
+        f"▪️ نوع الحركة: 🚀 زخم شراء قوي\n"
+        f"▪️ نسبة الارتفاع: <b>{dp:+.2f}%</b>\n"
+        f"▪️ السعر الحالي: <b>{price:.2f}$</b>\n"
+        f"▪️ حجم آخر 15 دقيقة: <b>{vol_15m:,}</b> سهم\n"
+        f"▪️ قيمة التداول: <b>${int(dollar_15m):,}</b>\n"
+        f"▪️ مرات التنبيه اليوم: {count_today}\n"
+        f"▪️ الخبر: {news_text}\n"
+        f"⏰ التوقيت الأمريكي: {fmt_us_time()}"
+    )
     bot.send_message(CHANNEL_ID, msg)
 
 ###############################################################################
-#                                  الحلقة الرئيسية                            #
+#                            الحلقة الرئيسية                                 #
 ###############################################################################
 
-_daily_counts = {}
-
-def symbols_generator():
-    syms = fh_get_symbols_us()
-    if not syms:
-        syms = ["AAPL", "NVDA", "TSLA", "AMZN", "MSFT"]
-    print(f"Loaded {len(syms)} symbols.")
-    while True:
-        random.shuffle(syms)
-        for s in syms:
-            yield s
-
 def main_loop():
-    gen = symbols_generator()
-    bot.send_message(CHANNEL_ID, "✅ البوت اشتغل الآن — مراقبة أعلى 50 سهم زخماً (اختبار)")
+    syms = fh_get_symbols_us()
+    bot.send_message(CHANNEL_ID, "✅ البوت بدأ مراقبة أعلى الأسهم زخمًا (الإصدار الخفيف)")
+    print(f"Loaded {len(syms)} symbols.")
+    per_cycle = 30  # ✅ تخفيف الضغط على API
     while True:
         start_ts = time.time()
         checked = 0
         alerts = 0
-        per_cycle = 120
-        for _ in range(per_cycle):
-            symbol = next(gen)
+        random.shuffle(syms)
+        for symbol in syms[:per_cycle]:
             try:
                 q = fh_quote(symbol)
-                price = q.get("c") or 0
-                dp = q.get("dp")
-                if not price or price <= 0 or dp is None:
+                price = q.get("c", 0)
+                dp = q.get("dp", 0)
+                if not price or dp is None:
                     continue
                 ok, vol_15m, dollar_15m = has_enough_momentum_and_liquidity(symbol, price, dp)
                 checked += 1
@@ -206,7 +170,7 @@ def main_loop():
                     last_t = last_sent.get(symbol, 0)
                     now_t = time.time()
                     if now_t - last_t >= REPEAT_COOLDOWN_S:
-                        send_alert(symbol, float(price), float(dp), vol_15m, dollar_15m)
+                        send_alert(symbol, price, dp, vol_15m, dollar_15m)
                         last_sent[symbol] = now_t
                         alerts += 1
             except Exception as e:
@@ -217,7 +181,7 @@ def main_loop():
         time.sleep(sleep_for)
 
 ###############################################################################
-#                                 Flask Keep-alive                            #
+#                              Flask للحفاظ على التشغيل                       #
 ###############################################################################
 
 app = Flask(__name__)
@@ -231,7 +195,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port, debug=False)
 
 ###############################################################################
-#                                    التشغيل                                   #
+#                                التشغيل الفعلي                               #
 ###############################################################################
 
 if __name__ == "__main__":
@@ -240,7 +204,7 @@ if __name__ == "__main__":
 
     def start_bot():
         try:
-            print("✅ بدء تشغيل الحلقة الرئيسية...")
+            print("✅ بدء تشغيل الحلقة الرئيسية (نسخة خفيفة)...")
             main_loop()
         except Exception as e:
             print("❌ خطأ في main_loop:", e)
@@ -249,4 +213,3 @@ if __name__ == "__main__":
 
     while True:
         time.sleep(60)
-
