@@ -20,10 +20,14 @@ FINNHUB_KEYS = [
 def get_key():
     return random.choice(FINNHUB_KEYS)
 
-MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ, NYSE, AMEX
-CHECK_INTERVAL_SEC = 60
-UP_CHANGE_PCT      = 20  # ✅ فقط الأسهم فوق +20%
-REPEAT_COOLDOWN_S  = 15 * 60
+# ✅ فقط هذه الأسواق (NASDAQ, NYSE, AMEX)
+MARKET_MICS = {"XNAS", "XNYS", "XASE"}
+
+# ✅ إعدادات الفحص
+CHECK_INTERVAL_SEC = 60          # كل دقيقة
+UP_CHANGE_PCT      = 20          # نسبة الارتفاع المطلوبة
+MIN_PRICE          = 1.00        # تجاهل الأسهم تحت 1 دولار (بدون penny stocks)
+REPEAT_COOLDOWN_S  = 15 * 60     # يمنع التكرار خلال 15 دقيقة
 US_TZ = pytz.timezone("US/Eastern")
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
@@ -110,7 +114,7 @@ def send_alert(symbol, price, dp):
 
 def main_loop():
     syms = fh_get_symbols_us()
-    bot.send_message(CHANNEL_ID, "✅ البوت بدأ — مراقبة الأسهم فوق 20% 📈")
+    bot.send_message(CHANNEL_ID, "✅ بدأ البوت — مراقبة أسهم NASDAQ / NYSE / AMEX فوق 20% 📈 (بدون penny stocks)")
     print(f"Loaded {len(syms)} symbols.")
     per_cycle = 30  # عدد الأسهم التي يتم فحصها في كل دورة لتجنب 429
 
@@ -126,7 +130,8 @@ def main_loop():
                 dp = q.get("dp", 0)
                 if dp is None or price <= 0:
                     continue
-                if dp >= UP_CHANGE_PCT:
+                # ✅ فقط الأسهم فوق 20% وسعرها أكثر من 1 دولار
+                if dp >= UP_CHANGE_PCT and price >= MIN_PRICE:
                     last_t = last_sent.get(symbol, 0)
                     now_t = time.time()
                     if now_t - last_t >= REPEAT_COOLDOWN_S:
@@ -165,7 +170,7 @@ if __name__ == "__main__":
 
     def start_bot():
         try:
-            print("✅ بدء تشغيل الحلقة — مراقبة الأسهم فوق 20% 📊")
+            print("✅ بدأ البوت — مراقبة الأسهم فوق 20% (بدون penny stocks) 📊")
             main_loop()
         except Exception as e:
             print("❌ خطأ في main_loop:", e)
