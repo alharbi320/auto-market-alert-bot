@@ -130,25 +130,22 @@ import time
 
 def start_all():
     print("==> تشغيل Flask ...")
-    t1 = threading.Thread(target=run_web, daemon=True)
-    t1.start()
+    threading.Thread(target=run_web, daemon=True).start()
     time.sleep(3)
-
     print("==> تشغيل الحلقة الرئيسية ...")
-    t2 = threading.Thread(target=main_loop, daemon=True)
-    t2.start()
+    try:
+        threading.Thread(target=main_loop, daemon=True).start()
+        print("==> كل شيء شغال ✅")
+    except Exception as e:
+        print(f"[ERROR] فشل تشغيل الحلقة الرئيسية: {e}")
 
-    print("==> كل شيء شغال ✅")
-    t1.join()
-    t2.join()
+# ✅ تشغيل تلقائي عند الإقلاع (حتى لو Render تجاهل if __name__ == '__main__')
+start_all()
 
-# ✅ استدعاء مباشر بدون شرط
-if True:
-    start_all()
-
-# منع الإيقاف التلقائي
+# حلقة انتظار حتى لا يغلق السيرفر
 while True:
-    time.sleep(60)
+    time.sleep(30)
+
 
 
 
