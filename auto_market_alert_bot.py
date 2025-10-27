@@ -125,13 +125,17 @@ def run_web():
     app.run(host="0.0.0.0", port=port, debug=False)
 
 # ------------------ التشغيل ------------------
-if __name__ == "__main__":
+def start_all():
+    print("==> Flask web starting...")
     threading.Thread(target=run_web, daemon=True).start()
-    print("==> Flask web started.")
-    # ✅ هذا هو السطر اللي يشغّل الحلقة فعلاً
-    t = threading.Thread(target=main_loop, daemon=True)
-    t.start()
-    print("==> Main loop started ✅")
-    # نخلي السيرفر يشتغل بلا توقف
-    while True:
-        time.sleep(60)
+    print("==> Starting main loop...")
+    threading.Thread(target=main_loop, daemon=True).start()
+
+# ✅ استدعاء فوري لتشغيل كل شيء
+start_all()
+
+# نمنع الخروج
+while True:
+    time.sleep(60)
+
+
