@@ -6,13 +6,13 @@ import telebot
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ========= إعدادات البوت =========
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "ضع_توكن_البوت_هنا")
-CHAT_ID          = os.getenv("CHAT_ID", "ضع_رقم_المحادثة_هنا")
-FINNHUB_API      = os.getenv("FINNHUB_API", "ضع_مفتاح_finnhub_هنا")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU")
+CHAT_ID = os.getenv("CHAT_ID", "997530834")
+FINNHUB_API = os.getenv("FINNHUB_API", "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg")
 
-INTERVAL_SECONDS = 15  # الفاصل بين كل فحص
+INTERVAL_SECONDS = 15
 RATE_LIMIT_PER_MIN = 50
-DAILY_RISE_PCT    = 15
+DAILY_RISE_PCT = 15
 MOMO_PRICE_5M_PCT = 5
 MOMO_VOL_SPIKE_FACTOR = 2
 STATE_FILE = "auto_stock_state.json"
@@ -28,7 +28,7 @@ STATE = {
     "symbols_loaded_for_date": ""
 }
 
-# ========= الأدوات المساعدة =========
+# ========= أدوات مساعدة =========
 def ny_now():
     return datetime.now(TZ_NY)
 
@@ -182,12 +182,12 @@ def process_symbol(symbol):
         if news: msg += "\n\n" + news
         bot.send_message(CHAT_ID, msg)
 
-# ========= حلقة المراقبة =========
+# ========= حلقة الفحص =========
 def scanner_loop():
     while True:
         try:
             now_ny = ny_now()
-            weekday = now_ny.weekday()  # Monday=0 ... Sunday=6
+            weekday = now_ny.weekday()
             if weekday >= 5:
                 print(f"⏸️ السوق مغلق ({now_ny.strftime('%A')})، النوم 6 ساعات...")
                 time.sleep(6 * 3600)
@@ -219,14 +219,15 @@ def scanner_loop():
         except Exception:
             time.sleep(INTERVAL_SECONDS)
 
-# ========= أوامر التلغرام =========
+# ========= أوامر تليغرام =========
 @bot.message_handler(commands=["start","help"])
 def cmd_start(message):
     bot.reply_to(message,
         "👋 أهلاً! أنا *auto-market-alert-bot*\n"
         f"• أنبّهك إذا ارتفع السهم ≥ *{DAILY_RISE_PCT:.0f}%*\n"
-        f"• وأكتشف الزخم اللحظي بفوليوم عالي\n"
-        "• أرسل رمز السهم (مثل: AAPL / WGRX) لأعطيك السعر وآخر خبر إيجابي.\n"
+        "• وأكتشف الزخم اللحظي بفوليوم عالي\n"
+        "• أرسل رمز السهم (مثل: AAPL / WGRX)\n"
+        "• لأعطيك السعر وآخر خبر إيجابي.\n"
         "• يتوقف تلقائيًا السبت والأحد.\n"
         "• وأبقى نشط بفضل UptimeRobot 🔁"
     )
@@ -250,7 +251,7 @@ def on_text(message):
         lines.append("\n" + news)
     bot.reply_to(message, "\n".join(lines))
 
-# ========= التشغيل الرئيسي =========
+# ========= التشغيل =========
 def start_threads():
     t = threading.Thread(target=scanner_loop, daemon=True)
     t.start()
@@ -258,7 +259,7 @@ def start_threads():
 if __name__ == "__main__":
     print("✅ auto-market-alert-bot running (stocks only)…")
 
-    # 🌐 خادم HTTP يدعم GET و HEAD لـ UptimeRobot
+    # 🌐 خادم HTTP لأوامر UptimeRobot
     class PingHandler(BaseHTTPRequestHandler):
         def do_HEAD(self):
             self.send_response(200)
@@ -277,13 +278,20 @@ if __name__ == "__main__":
         print(f"🌐 Web ping server running on port {port}")
         server.serve_forever()
 
-    # تشغيل السيرفر أولًا
     threading.Thread(target=run_server, daemon=True).start()
 
-    # بعد 5 ثواني نبدأ فحص الأسهم
+    # 🔒 فحص التوكن قبل التشغيل لتفادي الخطأ 409
+    try:
+        bot.get_me()
+        print("✅ Bot connected successfully")
+    except Exception as e:
+        print("⚠️ Telegram connection error:", e)
+        exit()
+
+    # 🚀 تشغيل عمليات المراقبة
     time.sleep(5)
     print("🚀 بدء حلقة المراقبة التلقائية للأسهم...")
     start_threads()
 
-    # تشغيل البوت
-    bot.infinity_polling(timeout=60, long_polling_timeout=50)
+    # 👇 تشغيل البوت مرة واحدة فقط
+    bot.infinity_polling(timeout=60, long_polling_timeout=50, allowed_updates=telebot.util.update_types)
