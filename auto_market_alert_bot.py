@@ -1,167 +1,93 @@
-import requests, time, threading
-from datetime import datetime, timedelta, date
-import pytz
+import requests
 import telebot
+import time
+from datetime import datetime
 from flask import Flask
 
-# ========== إعدادات البوت ==========
+# ===== إعدادات البوت =====
 TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
 CHANNEL_ID = "@kaaty320"
-FINNHUB_API = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
+FINNHUB_API = "3duq1hr01qil14apjtb0d3udq1hr01qil14apjtb"
 bot = telebot.TeleBot(TOKEN)
 
-# ========= الإعدادات العامة =========
+# ===== إعدادات السوق =====
 MARKETS = ["NASDAQ", "NYSE", "AMEX"]
-CHECK_INTERVAL = 60         # كل دقيقة
-UP_CHANGE = 10.0            # ارتفاع 10% أو أكثر
-VOLUME_MULT = 1.5           # حجم اليوم ≥ 1.5× المتوسط
-RSI_PERIOD = 14
+CHECK_INTERVAL = 60  # كل دقيقة
+UP_CHANGE = 10.0     # ارتفاع 10٪ أو أكثر
 
-last_sent = {}
-daily_count = {}
-today_str = date.today().isoformat()
+# قاعدة بيانات مؤقتة لتجنب التكرار
+sent_alerts = {}
 
-# ========= أدوات مساعدة =========
-def reset_day():
-    global today_str, daily_count
-    now = date.today().isoformat()
-    if now != today_str:
-        today_str = now
-        daily_count = {}
-
-def fmt_time_us():
-    return datetime.now(pytz.timezone("US/Eastern")).strftime("%I:%M:%S %p")
-
-def fmt_money(n):
+# ===== دالة لجلب الأسهم ذات الزخم من Finnhub =====
+def get_high_momentum_stocks():
+    url = f"https://finnhub.io/api/v1/scan/technical?token={FINNHUB_API}"
     try:
-        n = float(n)
-    except: return "0$"
-    if n >= 1e9:  return f"{n/1e9:.1f}B$"
-    if n >= 1e6:  return f"{n/1e6:.1f}M$"
-    if n >= 1e3:  return f"{n/1e3:.1f}K$"
-    return f"{n:.0f}$"
+        r = requests.get(url).json()
+        results = r.get("technicalAnalysis", [])
+        symbols = []
+        for item in results:
+            symbol = item.get("symbol", "")
+            exchange = item.get("exchange", "")
+            if exchange in MARKETS:
+                symbols.append(symbol)
+        return symbols
+    except Exception as e:
+        print(f"❌ خطأ في جلب الزخم: {e}")
+        return []
 
-# ========= دوال جلب البيانات =========
-def get_symbols():
-    symbols = []
-    for exch in MARKETS:
-        try:
-            url = f"https://finnhub.io/api/v1/stock/symbol?exchange={exch}&token={FINNHUB_API}"
-            res = requests.get(url, timeout=15).json()
-            for x in res:
-                sym = x.get("symbol")
-                if sym and sym.isalpha():
-                    symbols.append(sym)
-            time.sleep(1)
-        except: pass
-    print(f"✅ جلبنا {len(symbols)} رمز من الأسواق المحددة.")
-    return symbols[:200]  # أول 200 فقط لتجنب تجاوز الحد المجاني
-
-def get_quote(sym):
+# ===== دالة لجلب بيانات السهم =====
+def get_stock_data(symbol):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m"
     try:
-        r = requests.get(f"https://finnhub.io/api/v1/quote?symbol={sym}&token={FINNHUB_API}", timeout=10).json()
-        return {"price": r["c"], "prev": r["pc"], "dp": r["dp"], "vol": r["v"]}
-    except: return None
+        r = requests.get(url).json()
+        meta = r["chart"]["result"][0]["meta"]
+        price = meta["regularMarketPrice"]
+        prev_close = meta["previousClose"]
+        change_percent = ((price - prev_close) / prev_close) * 100
+        return round(price, 2), round(change_percent, 2)
+    except Exception:
+        return None, None
 
-def get_candles(sym):
-    try:
-        now = int(datetime.utcnow().timestamp())
-        frm = now - 15 * 24 * 3600
-        url = f"https://finnhub.io/api/v1/stock/candle?symbol={sym}&resolution=D&from={frm}&to={now}&token={FINNHUB_API}"
-        j = requests.get(url, timeout=10).json()
-        if j.get("s") == "ok": return j
-    except: pass
-    return None
-
-def get_rsi(sym):
-    try:
-        now = int(datetime.utcnow().timestamp())
-        frm = now - 200 * 24 * 3600
-        url = f"https://finnhub.io/api/v1/indicator?symbol={sym}&resolution=D&from={frm}&to={now}&indicator=rsi&timeperiod={RSI_PERIOD}&token={FINNHUB_API}"
-        j = requests.get(url, timeout=10).json()
-        if "rsi" in j and j["rsi"]: return j["rsi"][-1]
-    except: pass
-    return None
-
-def get_news(sym):
-    try:
-        now = datetime.utcnow()
-        start = (now - timedelta(hours=6)).strftime("%Y-%m-%d")
-        end = now.strftime("%Y-%m-%d")
-        url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={start}&to={end}&token={FINNHUB_API}"
-        j = requests.get(url, timeout=10).json()
-        if isinstance(j, list) and j:
-            return f"📢 الخبر: {j[0].get('headline')}"
-    except: pass
-    return "📢 الخبر: بدون خبر"
-
-# ========= صياغة الرسالة =========
-def build_msg(sym, dp, price, rel_vol, liquidity, rsi_val, news):
-    reset_day()
-    daily_count[sym] = daily_count.get(sym, 0) + 1
+# ===== تنسيق الرسالة =====
+def format_alert(symbol, price, change):
+    now = datetime.now().strftime("%I:%M:%S %p")
     msg = (
-        f"▫️الرمز: {sym}\n"
-        f"▫️نوع الزخم: 🚀 زخم شراء قوي\n"
-        f"▫️نسبة الارتفاع: +{dp:.2f}%\n"
-        f"▫️RSI: {rsi_val:.1f}\n"
-        f"▫️السعر الحالي: {price:.2f} دولار\n"
-        f"▫️الحجم النسبي: {rel_vol:.2f}x\n"
-        f"▫️📊 السيولة: {fmt_money(liquidity)}\n"
-        f"▫️عدد مرات التنبيه اليوم: {daily_count[sym]} مرة\n"
-        f"{news}\n"
-        f"⏰ التوقيت الأمريكي: {fmt_time_us()}"
+        f"📈 الرمز: {symbol}\n"
+        f"🚀 نسبة الارتفاع: +{change:.2f}%\n"
+        f"💵 السعر الحالي: {price} دولار\n"
+        f"🕐 التوقيت الأمريكي: {now}"
     )
     return msg
 
-# ========= الفحص الرئيسي =========
-symbols_cache = []
+# ===== إرسال التنبيه =====
+def send_alert(symbol, price, change):
+    message = format_alert(symbol, price, change)
+    bot.send_message(CHANNEL_ID, message)
 
-def refresh_symbols():
-    global symbols_cache
+# ===== الحلقة الرئيسية =====
+def main_loop():
     while True:
-        symbols_cache = get_symbols()
-        time.sleep(600)  # كل 10 دقائق يحدث القائمة
-
-def monitor_loop():
-    while True:
-        if not symbols_cache:
-            time.sleep(5); continue
-        for sym in symbols_cache:
-            try:
-                q = get_quote(sym)
-                if not q or q["dp"] < UP_CHANGE: continue  # فقط الزخم الصاعد
-                candles = get_candles(sym)
-                rel_vol, liquidity = 1.0, 0.0
-                if candles and len(candles.get("v", [])) >= 11:
-                    vols = candles["v"]
-                    avg10 = sum(vols[-11:-1]) / 10
-                    today_vol = vols[-1]
-                    rel_vol = today_vol / avg10 if avg10 > 0 else 1
-                    liquidity = today_vol * q["price"]
-                if rel_vol < VOLUME_MULT: continue  # لازم حجم كبير
-                rsi_val = get_rsi(sym)
-                if not rsi_val or rsi_val < 60: continue  # تأكيد زخم شراء
-                news = get_news(sym)
-                msg = build_msg(sym, q["dp"], q["price"], rel_vol, liquidity, rsi_val, news)
-                key = f"{sym}:{int(q['dp'])}"
-                if key not in last_sent:
-                    bot.send_message(CHANNEL_ID, msg)
-                    last_sent[key] = True
-                    print(f"🚀 {sym} +{q['dp']:.2f}% RSI {rsi_val:.1f}")
-                time.sleep(0.3)
-            except Exception as e:
-                print(f"[{sym}] Error: {e}")
+        symbols = get_high_momentum_stocks()
+        print(f"🔍 عدد الأسهم ذات الزخم العالي: {len(symbols)}")
+        for sym in symbols:
+            price, change = get_stock_data(sym)
+            if price is None or change is None:
+                continue
+            if change >= UP_CHANGE:
+                if sym not in sent_alerts or sent_alerts[sym] != change:
+                    send_alert(sym, price, change)
+                    sent_alerts[sym] = change
+                    print(f"✅ تم إرسال تنبيه لـ {sym} (+{change}%)")
         time.sleep(CHECK_INTERVAL)
 
-# ========= Flask للإبقاء على الخدمة =========
+# ===== Flask لتشغيل Render =====
 app = Flask(__name__)
-@app.route("/")
-def home():
-    return "✅ Momentum Bot running (NASDAQ/NYSE/AMEX only)."
 
-# ========= التشغيل =========
+@app.route('/')
+def home():
+    return "✅ البوت يعمل بنجاح!"
+
 if __name__ == "__main__":
-    print("🚀 بدء تشغيل البوت (زخم صاعد فقط من NASDAQ/NYSE/AMEX)")
-    threading.Thread(target=refresh_symbols, daemon=True).start()
-    threading.Thread(target=monitor_loop, daemon=True).start()
+    import threading
+    threading.Thread(target=main_loop).start()
     app.run(host="0.0.0.0", port=10000)
