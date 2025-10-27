@@ -1,98 +1,93 @@
 import os
-import requests
 import time
+import requests
 import telebot
+import threading
 from datetime import datetime, timedelta
 from flask import Flask
 
-# ========= إعدادات البوت =========
+# ========== إعدادات البوت ==========
 BOT_TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
 CHAT_ID = "997530834"
-CHECK_INTERVAL = 30  # كل 30 ثانية
-DAILY_RISE_PCT = 15  # نسبة التنبيه
 API_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
+DAILY_RISE_PCT = 15
+CHECK_INTERVAL = 30
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ========= دالة جلب بيانات السهم =========
+# ========== دوال مساعدة ==========
 def get_quote(symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol.upper()}&token={API_KEY}"
     try:
-        response = requests.get(url)
-        data = response.json()
+        res = requests.get(url)
+        data = res.json()
         if "c" in data:
             return data
     except Exception as e:
-        print(f"Error fetching quote for {symbol}: {e}")
+        print(f"Error fetching {symbol}: {e}")
     return None
 
-# ========= دالة جلب آخر خبر عن السهم =========
+
 def get_news(symbol):
     try:
-        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol.upper()}&from={(datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')}&to={datetime.utcnow().strftime('%Y-%m-%d')}&token={API_KEY}"
+        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol.upper()}&from={(datetime.utcnow()-timedelta(days=7)).strftime('%Y-%m-%d')}&to={datetime.utcnow().strftime('%Y-%m-%d')}&token={API_KEY}"
         res = requests.get(url)
         news = res.json()
         if news and isinstance(news, list) and len(news) > 0:
             return news[0].get("headline", "لا يوجد خبر حديث.")
         else:
             return "لا يوجد خبر حديث."
-    except Exception:
-        return "حدث خطأ أثناء جلب الأخبار."
+    except:
+        return "خطأ في جلب الأخبار."
 
-# ========= دالة فحص الارتفاع =========
+
 def check_price(symbol):
-    quote = get_quote(symbol)
-    if not quote:
+    q = get_quote(symbol)
+    if not q:
         return None
-    c = quote["c"]  # السعر الحالي
-    pc = quote["pc"]  # سعر الإغلاق السابق
+    c, pc = q["c"], q["pc"]
     if pc == 0:
         return None
-    change_pct = ((c - pc) / pc) * 100
-    return c, pc, change_pct
+    pct = ((c - pc) / pc) * 100
+    return c, pc, pct
 
-# ========= أوامر التلغرام =========
+
+# ========== أوامر تلغرام ==========
 @bot.message_handler(commands=["start", "help"])
-def cmd_start(message):
+def start_message(msg):
     bot.reply_to(
-        message,
-        f"👋 أهلاً أنا *auto-market-alert-bot*!\n"
-        f"✨ أنبّهك إذا ارتفع السهم ≥ {DAILY_RISE_PCT}% أو انخفض ≤ -10%.\n"
-        f"📈 أرسل رمز السهم (مثلاً: AAPL / WGRX)\n"
-        f"📰 سأعطيك السعر وآخر خبر إيجابي.\n"
-        f"🔁 يتم الفحص كل {CHECK_INTERVAL} ثانية.\n"
-        f"⚙️ البوت يعمل تلقائيًا عبر UptimeRobot."
+        msg,
+        f"👋 أهلاً بك!\n"
+        f"سأنبهك إذا ارتفع السهم أكثر من {DAILY_RISE_PCT}% 📈\n"
+        f"أرسل رمز السهم مثل (AAPL / WGRX)\n"
+        f"ويتم الفحص كل {CHECK_INTERVAL} ثانية 🔁"
     )
 
-@bot.message_handler(func=lambda m: True, content_types=['text'])
-def on_text(message):
-    sym = message.text.strip().upper()
-    if not sym or len(sym) > 12:
-        bot.reply_to(message, "❌ اكتب رمز سهم صحيح (مثلاً: AAPL)")
-        return
 
-    quote = get_quote(sym)
-    if not quote:
-        bot.reply_to(message, "⚠️ لم أستطع جلب بيانات السهم.")
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def handle_symbol(msg):
+    sym = msg.text.strip().upper()
+    q = get_quote(sym)
+    if not q:
+        bot.reply_to(msg, "⚠️ لم أستطع جلب بيانات السهم.")
         return
-
-    c = quote["c"]
-    pc = quote["pc"]
-    change = ((c - pc) / pc) * 100 if pc else 0
+    c, pc = q["c"], q["pc"]
+    pct = ((c - pc) / pc) * 100 if pc else 0
     news = get_news(sym)
-
-    msg = (
+    bot.reply_to(
+        msg,
         f"💹 *رمز السهم:* {sym}\n"
         f"💰 *السعر الحالي:* {c}\n"
         f"📊 *الإغلاق السابق:* {pc}\n"
-        f"📈 *التغير:* {change:.2f}%\n\n"
-        f"📰 *آخر خبر:* {news}"
+        f"📈 *التغير:* {pct:.2f}%\n\n"
+        f"📰 *آخر خبر:* {news}",
+        parse_mode="Markdown",
     )
-    bot.reply_to(message, msg, parse_mode="Markdown")
 
-# ========= فحص دوري تلقائي =========
+
+# ========== فحص تلقائي ==========
 def auto_check():
-    WATCHLIST = ["AAPL", "WGRX", "MGN", "NERV", "RANI", "TPET"]
+    WATCHLIST = ["AAPL", "WGRX", "NERV", "RANI", "TPET"]
     while True:
         for sym in WATCHLIST:
             try:
@@ -101,32 +96,27 @@ def auto_check():
                     continue
                 c, pc, pct = result
                 if pct >= DAILY_RISE_PCT:
-                    bot.send_message(
-                        CHAT_ID,
-                        f"🚀 السهم {sym} ارتفع بنسبة {pct:.2f}% (السعر الحالي: {c})"
-                    )
+                    bot.send_message(CHAT_ID, f"🚀 {sym} ارتفع {pct:.2f}% (السعر: {c})")
                 elif pct <= -10:
-                    bot.send_message(
-                        CHAT_ID,
-                        f"📉 السهم {sym} انخفض بنسبة {pct:.2f}% (السعر الحالي: {c})"
-                    )
+                    bot.send_message(CHAT_ID, f"📉 {sym} انخفض {pct:.2f}% (السعر: {c})")
             except Exception as e:
-                print(f"Error in auto_check for {sym}: {e}")
+                print(f"Error checking {sym}: {e}")
         time.sleep(CHECK_INTERVAL)
 
-# ========= Flask لإبقاء Render حي =========
+
+# ========== Flask لإبقاء Render حي ==========
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
-    return "✅ Bot is running successfully on Render!"
+    return "✅ Auto Market Alert Bot is running!"
 
-# ========= تشغيل البوت =========
+# ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    import threading
-    t = threading.Thread(target=auto_check)
-    t.daemon = True
-    t.start()
-
+    # تشغيل التحقق التلقائي في Thread
+    threading.Thread(target=auto_check, daemon=True).start()
+    
+    # تشغيل Flask على المنفذ الذي يطلبه Render
     port = int(os.environ.get("PORT", 5000))
+    print(f"⚙️ Running Flask server on port {port}")
     app.run(host="0.0.0.0", port=port)
