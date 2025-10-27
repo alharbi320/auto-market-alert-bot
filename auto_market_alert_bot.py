@@ -1,122 +1,86 @@
-import os
-import time
-import requests
 import telebot
-import threading
+import requests
+import time
 from datetime import datetime, timedelta
-from flask import Flask
+import pytz
 
-# ========== إعدادات البوت ==========
-BOT_TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
-CHAT_ID = "997530834"
-API_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
-DAILY_RISE_PCT = 15
-CHECK_INTERVAL = 30
+# ========= إعدادات البوت =========
+TOKEN = "ضع_توكن_البوت_هنا"         # ← ضع التوكن من @BotFather
+CHANNEL_ID = "@kaaty320"             # ← اسم القناة العامة
+API_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"  # مفتاح Finnhub
+CHECK_INTERVAL = 60                  # كل 60 ثانية
+RISE_ALERT = 15                      # نسبة الارتفاع للتنبيه
+DROP_ALERT = -10                     # نسبة الهبوط للتنبيه
+bot = telebot.TeleBot(TOKEN)
+last_alerts = {}
 
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# ========== دوال مساعدة ==========
+# ========= دالة جلب السعر والتغير =========
 def get_quote(symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol.upper()}&token={API_KEY}"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m"
     try:
-        res = requests.get(url)
-        data = res.json()
-        if "c" in data:
-            return data
+        res = requests.get(url, timeout=10).json()
+        meta = res["chart"]["result"][0]["meta"]
+        price = meta["regularMarketPrice"]
+        prev = meta["chartPreviousClose"]
+        change = ((price - prev) / prev) * 100 if prev else 0
+        return round(price, 2), round(change, 2)
     except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
-    return None
+        print(f"❌ خطأ في جلب {symbol}: {e}")
+        return None, None
 
-
-def get_news(symbol):
+# ========= دالة جلب آخر خبر من Finnhub =========
+def get_latest_news(symbol):
     try:
-        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol.upper()}&from={(datetime.utcnow()-timedelta(days=7)).strftime('%Y-%m-%d')}&to={datetime.utcnow().strftime('%Y-%m-%d')}&token={API_KEY}"
-        res = requests.get(url)
-        news = res.json()
-        if news and isinstance(news, list) and len(news) > 0:
-            return news[0].get("headline", "لا يوجد خبر حديث.")
+        now = datetime.utcnow()
+        past = now - timedelta(days=3)
+        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={past.strftime('%Y-%m-%d')}&to={now.strftime('%Y-%m-%d')}&token={API_KEY}"
+        res = requests.get(url, timeout=10).json()
+        if res and isinstance(res, list) and len(res) > 0:
+            headline = res[0].get("headline", "")
+            return f"📰 <b>آخر خبر:</b> {headline}"
         else:
-            return "لا يوجد خبر حديث."
-    except:
-        return "خطأ في جلب الأخبار."
+            return "📰 <b>آخر خبر:</b> لا يوجد خبر حديث."
+    except Exception as e:
+        print(f"⚠️ خطأ في جلب الأخبار لـ {symbol}: {e}")
+        return "📰 <b>آخر خبر:</b> تعذر الحصول على البيانات."
 
-
-def check_price(symbol):
-    q = get_quote(symbol)
-    if not q:
-        return None
-    c, pc = q["c"], q["pc"]
-    if pc == 0:
-        return None
-    pct = ((c - pc) / pc) * 100
-    return c, pc, pct
-
-
-# ========== أوامر تلغرام ==========
-@bot.message_handler(commands=["start", "help"])
-def start_message(msg):
-    bot.reply_to(
-        msg,
-        f"👋 أهلاً بك!\n"
-        f"سأنبهك إذا ارتفع السهم أكثر من {DAILY_RISE_PCT}% 📈\n"
-        f"أرسل رمز السهم مثل (AAPL / WGRX)\n"
-        f"ويتم الفحص كل {CHECK_INTERVAL} ثانية 🔁"
-    )
-
-
-@bot.message_handler(func=lambda m: True, content_types=["text"])
-def handle_symbol(msg):
-    sym = msg.text.strip().upper()
-    q = get_quote(sym)
-    if not q:
-        bot.reply_to(msg, "⚠️ لم أستطع جلب بيانات السهم.")
+# ========= إرسال التنبيه مع منع التكرار =========
+def send_alert(symbol, message):
+    if last_alerts.get(symbol) == message:
         return
-    c, pc = q["c"], q["pc"]
-    pct = ((c - pc) / pc) * 100 if pc else 0
-    news = get_news(sym)
-    bot.reply_to(
-        msg,
-        f"💹 *رمز السهم:* {sym}\n"
-        f"💰 *السعر الحالي:* {c}\n"
-        f"📊 *الإغلاق السابق:* {pc}\n"
-        f"📈 *التغير:* {pct:.2f}%\n\n"
-        f"📰 *آخر خبر:* {news}",
-        parse_mode="Markdown",
+    last_alerts[symbol] = message
+    bot.send_message(CHANNEL_ID, message, parse_mode="HTML")
+
+# ========= تنسيق رسالة التنبيه =========
+def make_message(symbol, price, change, news):
+    now_us = datetime.now(pytz.timezone("US/Eastern")).strftime("%H:%M:%S")
+    الاتجاه = "🚀 ارتفاع قوي" if change > 0 else "📉 هبوط حاد"
+    نوع = "📊 زخم لحظي" if abs(change) < 15 else "⚡ تحرك كبير"
+    msg = (
+        f"<b>📈 الرمز:</b> {symbol}\n"
+        f"<b>{الاتجاه}</b>\n"
+        f"<b>💹 نسبة التغير:</b> {change:+.2f}%\n"
+        f"<b>💰 السعر الحالي:</b> {price} دولار\n"
+        f"<b>🧭 نوع الحركة:</b> {نوع}\n"
+        f"<b>🇺🇸 التوقيت الأمريكي:</b> {now_us}\n\n"
+        f"{news}"
     )
+    return msg
 
-
-# ========== فحص تلقائي ==========
-def auto_check():
-    WATCHLIST = ["AAPL", "WGRX", "NERV", "RANI", "TPET"]
+# ========= مراقبة مستمرة =========
+def monitor():
+    watchlist = ["CASI", "RANI", "WGRX", "TPET", "NERV", "AAPL"]
     while True:
-        for sym in WATCHLIST:
-            try:
-                result = check_price(sym)
-                if not result:
-                    continue
-                c, pc, pct = result
-                if pct >= DAILY_RISE_PCT:
-                    bot.send_message(CHAT_ID, f"🚀 {sym} ارتفع {pct:.2f}% (السعر: {c})")
-                elif pct <= -10:
-                    bot.send_message(CHAT_ID, f"📉 {sym} انخفض {pct:.2f}% (السعر: {c})")
-            except Exception as e:
-                print(f"Error checking {sym}: {e}")
+        for sym in watchlist:
+            price, change = get_quote(sym)
+            if price is None:
+                continue
+            if change >= RISE_ALERT or change <= DROP_ALERT or abs(change) >= 5:
+                news = get_latest_news(sym)
+                msg = make_message(sym, price, change, news)
+                send_alert(sym, msg)
         time.sleep(CHECK_INTERVAL)
 
-
-# ========== Flask لإبقاء Render حي ==========
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "✅ Auto Market Alert Bot is running!"
-
-# ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    # تشغيل التحقق التلقائي في Thread
-    threading.Thread(target=auto_check, daemon=True).start()
-    
-    # تشغيل Flask على المنفذ الذي يطلبه Render
-    port = int(os.environ.get("PORT", 5000))
-    print(f"⚙️ Running Flask server on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    print("🚀 البوت بدأ المراقبة وإرسال التنبيهات مع الأخبار إلى القناة...")
+    monitor()
