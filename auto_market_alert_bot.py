@@ -125,6 +125,9 @@ def run_web():
     app.run(host="0.0.0.0", port=port, debug=False)
 
 # ------------------ التشغيل ------------------
+import threading
+import time
+
 def start_all():
     print("==> تشغيل Flask ...")
     threading.Thread(target=run_web, daemon=True).start()
@@ -133,10 +136,10 @@ def start_all():
     threading.Thread(target=main_loop, daemon=True).start()
     print("==> كل شيء شغال ✅")
 
-# ✅ استدعاء فوري عند تشغيل السيرفر
+# ✅ استدعاء تلقائي عند تشغيل السيرفر
 start_all()
 
-# حلقة انتظار تمنع إيقاف السيرفر
+# منع الإيقاف التلقائي
 while True:
     time.sleep(60)
 
