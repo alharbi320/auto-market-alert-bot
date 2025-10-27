@@ -13,7 +13,7 @@ TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
 CHANNEL_ID = "@kaaty320"
 FINNHUB_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
 
-MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ, NYSE, AMEX
+MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ / NYSE / AMEX
 UP_CHANGE_PCT = 20
 MIN_PRICE = 1.0
 CHECK_INTERVAL_SEC = 60
@@ -23,7 +23,7 @@ US_TZ = pytz.timezone("US/Eastern")
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 last_sent, _daily_counts = {}, {}
 
-# ==================== Finnhub API ====================
+# ------------------ Finnhub API ------------------
 def fh_get_symbols_us():
     url = "https://finnhub.io/api/v1/stock/symbol"
     try:
@@ -58,7 +58,7 @@ def fh_last_news(symbol):
     except Exception:
         return "بدون خبر"
 
-# ==================== تنسيق وإرسال ====================
+# ------------------ التنبيهات ------------------
 def fmt_us_time():
     return datetime.now(US_TZ).strftime("%I:%M:%S %p")
 
@@ -78,8 +78,9 @@ def send_alert(symbol, price, dp):
     bot.send_message(CHANNEL_ID, msg)
     print(f"[ALERT] {symbol} +{dp:.2f}%")
 
-# ==================== الحلقة الرئيسية ====================
+# ------------------ الحلقة الرئيسية ------------------
 def main_loop():
+    print("[SYSTEM] Starting main loop...")
     syms = fh_get_symbols_us()
     bot.send_message(CHANNEL_ID, "🟢 بدأ البوت — مراقبة الأسهم فوق 20% (NASDAQ / NYSE / AMEX)")
     per_cycle = 50
@@ -112,7 +113,7 @@ def main_loop():
         print(f"[cycle] checked={checked}, alerts={alerts}, took={elapsed:.1f}s")
         time.sleep(max(1, CHECK_INTERVAL_SEC - elapsed))
 
-# ==================== Flask ====================
+# ------------------ Flask ------------------
 app = Flask(__name__)
 
 @app.route("/")
@@ -123,11 +124,14 @@ def run_web():
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
 
-# ==================== تشغيل البوت ====================
+# ------------------ التشغيل ------------------
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-    print("==> Service starting...")
-    # 🔥 هذا السطر المهم اللي يشغل الحلقة فعلاً
-    threading.Thread(target=main_loop, daemon=True).start()
+    print("==> Flask web started.")
+    # ✅ هذا هو السطر اللي يشغّل الحلقة فعلاً
+    t = threading.Thread(target=main_loop, daemon=True)
+    t.start()
+    print("==> Main loop started ✅")
+    # نخلي السيرفر يشتغل بلا توقف
     while True:
         time.sleep(60)
