@@ -130,18 +130,26 @@ import time
 
 def start_all():
     print("==> تشغيل Flask ...")
-    threading.Thread(target=run_web, daemon=True).start()
-    time.sleep(2)
-    print("==> تشغيل الحلقة الرئيسية ...")
-    threading.Thread(target=main_loop, daemon=True).start()
-    print("==> كل شيء شغال ✅")
+    t1 = threading.Thread(target=run_web, daemon=True)
+    t1.start()
+    time.sleep(3)
 
-# ✅ استدعاء تلقائي عند تشغيل السيرفر
-start_all()
+    print("==> تشغيل الحلقة الرئيسية ...")
+    t2 = threading.Thread(target=main_loop, daemon=True)
+    t2.start()
+
+    print("==> كل شيء شغال ✅")
+    t1.join()
+    t2.join()
+
+# ✅ استدعاء مباشر بدون شرط
+if True:
+    start_all()
 
 # منع الإيقاف التلقائي
 while True:
     time.sleep(60)
+
 
 
 
