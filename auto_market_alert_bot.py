@@ -3,6 +3,8 @@ import telebot
 import time
 from datetime import datetime
 from flask import Flask
+import os
+import threading
 
 # ===== إعدادات البوت =====
 TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
@@ -30,12 +32,13 @@ def get_high_momentum_stocks():
             exchange = item.get("exchange", "")
             if exchange in MARKETS:
                 symbols.append(symbol)
+        print(f"🔍 فحص الزخم: تم العثور على {len(symbols)} أسهم من {MARKETS}")
         return symbols
     except Exception as e:
         print(f"❌ خطأ في جلب الزخم: {e}")
         return []
 
-# ===== دالة لجلب بيانات السهم =====
+# ===== دالة لجلب بيانات السهم من Yahoo =====
 def get_stock_data(symbol):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m"
     try:
@@ -68,7 +71,8 @@ def send_alert(symbol, price, change):
 def main_loop():
     while True:
         symbols = get_high_momentum_stocks()
-        print(f"🔍 عدد الأسهم ذات الزخم العالي: {len(symbols)}")
+        if not symbols:
+            print("⚠️ لم يتم العثور على أسهم بزخم عالي حالياً.")
         for sym in symbols:
             price, change = get_stock_data(sym)
             if price is None or change is None:
@@ -85,9 +89,10 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ البوت يعمل بنجاح!"
+    return "✅ البوت يعمل بنجاح على Render!"
 
+# ===== التشغيل الرئيسي =====
 if __name__ == "__main__":
-    import threading
-    threading.Thread(target=main_loop).start()
-    app.run(host="0.0.0.0", port=10000)
+    threading.Thread(target=main_loop, daemon=True).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
