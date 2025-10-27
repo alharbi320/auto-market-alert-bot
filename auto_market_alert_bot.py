@@ -16,7 +16,7 @@ from flask import Flask
 # ========= الإعدادات العامة =========
 TOKEN       = os.getenv("BOT_TOKEN", "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU")
 CHANNEL_ID  = os.getenv("CHANNEL_ID", "@kaaty320")
-FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "d3udq1hr01qi14apjtb0d3udq1hr01qi14apjtbg")
+FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg")
 
 # أسواق التداول المطلوبة
 MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ, NYSE, AMEX
@@ -249,3 +249,4 @@ if __name__ == "__main__":
 
     while True:
         time.sleep(60)
+
