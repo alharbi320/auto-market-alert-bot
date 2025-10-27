@@ -10,12 +10,12 @@ TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "ضع_توكن_البوت_هنا"
 CHAT_ID          = os.getenv("CHAT_ID", "ضع_رقم_المحادثة_هنا")
 FINNHUB_API      = os.getenv("FINNHUB_API", "ضع_مفتاح_finnhub_هنا")
 
-INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "10"))
-RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "50"))
-DAILY_RISE_PCT    = float(os.getenv("DAILY_RISE_PCT", "15"))
-MOMO_PRICE_5M_PCT = float(os.getenv("MOMO_PRICE_5M_PCT", "5"))
-MOMO_VOL_SPIKE_FACTOR = float(os.getenv("MOMO_VOL_SPIKE_FACTOR", "2"))
-STATE_FILE = os.getenv("STATE_FILE", "auto_stock_state.json")
+INTERVAL_SECONDS = 15  # الفاصل بين كل فحص
+RATE_LIMIT_PER_MIN = 50
+DAILY_RISE_PCT    = 15
+MOMO_PRICE_5M_PCT = 5
+MOMO_VOL_SPIKE_FACTOR = 2
+STATE_FILE = "auto_stock_state.json"
 TZ_NY = pytz.timezone("America/New_York")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="Markdown")
@@ -258,7 +258,7 @@ def start_threads():
 if __name__ == "__main__":
     print("✅ auto-market-alert-bot running (stocks only)…")
 
-    # 🌐 خادم HTTP يدعم GET وHEAD لـ UptimeRobot
+    # 🌐 خادم HTTP يدعم GET و HEAD لـ UptimeRobot
     class PingHandler(BaseHTTPRequestHandler):
         def do_HEAD(self):
             self.send_response(200)
@@ -277,6 +277,13 @@ if __name__ == "__main__":
         print(f"🌐 Web ping server running on port {port}")
         server.serve_forever()
 
+    # تشغيل السيرفر أولًا
     threading.Thread(target=run_server, daemon=True).start()
+
+    # بعد 5 ثواني نبدأ فحص الأسهم
+    time.sleep(5)
+    print("🚀 بدء حلقة المراقبة التلقائية للأسهم...")
     start_threads()
+
+    # تشغيل البوت
     bot.infinity_polling(timeout=60, long_polling_timeout=50)
