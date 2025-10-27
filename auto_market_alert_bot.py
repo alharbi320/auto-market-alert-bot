@@ -9,172 +9,130 @@ from datetime import datetime, timedelta
 import telebot
 from flask import Flask
 
-# ========= الإعدادات العامة =========
-TOKEN       = os.getenv("BOT_TOKEN", "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU")
-CHANNEL_ID  = os.getenv("CHANNEL_ID", "@kaaty320")
+# ========== إعدادات عامة ==========
+TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
+CHANNEL_ID = "@kaaty320"
+FINNHUB_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
 
-# مفاتيح Finnhub (يمكنك إضافة أكثر من مفتاح)
-FINNHUB_KEYS = [
-    "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
-]
-def get_key():
-    return random.choice(FINNHUB_KEYS)
-
-# ✅ فقط هذه الأسواق (NASDAQ, NYSE, AMEX)
-MARKET_MICS = {"XNAS", "XNYS", "XASE"}
-
-# ✅ إعدادات الفحص
-CHECK_INTERVAL_SEC = 60          # كل دقيقة
-UP_CHANGE_PCT      = 20          # نسبة الارتفاع المطلوبة
-MIN_PRICE          = 1.00        # تجاهل الأسهم تحت 1 دولار (بدون penny stocks)
-REPEAT_COOLDOWN_S  = 15 * 60     # يمنع التكرار خلال 15 دقيقة
+MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ, NYSE, AMEX
+CHECK_INTERVAL_SEC = 60
+UP_CHANGE_PCT = 20
+MIN_PRICE = 1.00
+REPEAT_COOLDOWN_S = 15 * 60  # 15 دقيقة
 US_TZ = pytz.timezone("US/Eastern")
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 last_sent = {}
 _daily_counts = {}
 
-###############################################################################
-# Finnhub API
-###############################################################################
-
+# ========== أدوات API من Finnhub ==========
 def fh_get_symbols_us():
+    """جلب رموز الأسهم الأمريكية من الأسواق المطلوبة فقط"""
     url = "https://finnhub.io/api/v1/stock/symbol"
-    params = {"exchange": "US", "token": get_key()}
+    params = {"exchange": "US", "token": FINNHUB_KEY}
     try:
-        r = requests.get(url, params=params, timeout=20)
+        r = requests.get(url, params=params, timeout=25)
         r.raise_for_status()
         data = r.json()
-        syms = []
-        for x in data:
-            mic = (x.get("mic") or "").upper()
-            symbol = x.get("symbol")
-            if (mic in MARKET_MICS) and symbol and symbol.isalpha() and len(symbol) <= 5:
-                syms.append(symbol)
+        syms = [x["symbol"] for x in data if (x.get("mic") or "").upper() in MARKET_MICS]
         return sorted(set(syms))
     except Exception as e:
         print("fh_get_symbols_us error:", e)
-        return ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT"]
+        return ["AAPL", "TSLA", "NVDA", "AMZN"]
 
 def fh_quote(symbol):
-    url = "https://finnhub.io/api/v1/quote"
-    params = {"symbol": symbol, "token": get_key()}
-    r = requests.get(url, params=params, timeout=15)
+    """جلب السعر الحالي والنسبة + دعم الـ pre/after hours"""
+    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
+    r = requests.get(url, timeout=15)
     r.raise_for_status()
     return r.json()
 
-def fh_last_news(symbol, days=3):
-    to_dt = datetime.utcnow().date()
-    from_dt = to_dt - timedelta(days=days)
-    url = "https://finnhub.io/api/v1/company-news"
-    params = {"symbol": symbol, "from": str(from_dt), "to": str(to_dt), "token": get_key()}
+def fh_last_news(symbol):
+    """آخر خبر خلال 3 أيام"""
+    to_dt = datetime.now(datetime.UTC).date()
+    from_dt = to_dt - timedelta(days=3)
+    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={from_dt}&to={to_dt}&token={FINNHUB_KEY}"
     try:
-        r = requests.get(url, params=params, timeout=20)
+        r = requests.get(url, timeout=15)
         r.raise_for_status()
         data = r.json()
-        if isinstance(data, list) and data:
-            data.sort(key=lambda x: x.get("datetime", 0), reverse=True)
-            latest = data[0]
-            headline = latest.get("headline") or ""
-            source = latest.get("source") or ""
-            if headline:
-                return f"{headline} – {source}"
+        if data:
+            latest = max(data, key=lambda x: x.get("datetime", 0))
+            return latest.get("headline", "بدون خبر")
         return "بدون خبر"
     except Exception:
         return "بدون خبر"
 
-###############################################################################
-# التنبيه
-###############################################################################
-
+# ========== إرسال التنبيه ==========
 def fmt_us_time():
     return datetime.now(US_TZ).strftime("%I:%M:%S %p")
 
 def send_alert(symbol, price, dp):
     today = datetime.utcnow().date().isoformat()
     key = f"{symbol}:{today}"
-    count_today = _daily_counts.get(key, 0) + 1
-    _daily_counts[key] = count_today
+    _daily_counts[key] = _daily_counts.get(key, 0) + 1
 
-    news_text = fh_last_news(symbol, days=3)
+    news_text = fh_last_news(symbol)
     msg = (
         f"▪️ الرمز: <b>{symbol}</b>\n"
         f"▪️ نسبة الارتفاع: <b>{dp:+.2f}%</b>\n"
-        f"▪️ السعر الحالي: <b>{price:.2f}$</b>\n"
-        f"▪️ مرات التنبيه اليوم: {count_today}\n"
+        f"▪️ السعر الحالي: <b>${price:.2f}</b>\n"
+        f"▪️ عدد مرات التنبيه اليوم: <b>{_daily_counts[key]}</b>\n"
         f"▪️ الخبر: {news_text}\n"
         f"⏰ التوقيت الأمريكي: {fmt_us_time()}"
     )
     bot.send_message(CHANNEL_ID, msg)
-    print(f"[ALERT] {symbol} +{dp:.2f}% at {price}$")
+    print(f"[ALERT] {symbol} +{dp:.1f}%")
 
-###############################################################################
-# الحلقة الرئيسية
-###############################################################################
-
+# ========== الحلقة الرئيسية ==========
 def main_loop():
     syms = fh_get_symbols_us()
-    bot.send_message(CHANNEL_ID, "✅ بدأ البوت — مراقبة أسهم NASDAQ / NYSE / AMEX فوق 20% 📈 (بدون penny stocks)")
-    print(f"Loaded {len(syms)} symbols.")
-    per_cycle = 30  # عدد الأسهم التي يتم فحصها في كل دورة لتجنب 429
+    bot.send_message(CHANNEL_ID, "✅ بدأ البوت — مراقبة أسهم NASDAQ/NYSE/AMEX (+20%) تشمل Pre & After Hours 📊")
+    per_cycle = 100  # عدد الأسهم في كل دورة
 
     while True:
-        start_ts = time.time()
-        checked = 0
-        alerts = 0
+        start = time.time()
         random.shuffle(syms)
-        for symbol in syms[:per_cycle]:
+        checked, alerts = 0, 0
+
+        for s in syms[:per_cycle]:
             try:
-                q = fh_quote(symbol)
+                q = fh_quote(s)
                 price = q.get("c", 0)
                 dp = q.get("dp", 0)
-                if dp is None or price <= 0:
-                    continue
-                # ✅ فقط الأسهم فوق 20% وسعرها أكثر من 1 دولار
-                if dp >= UP_CHANGE_PCT and price >= MIN_PRICE:
-                    last_t = last_sent.get(symbol, 0)
-                    now_t = time.time()
-                    if now_t - last_t >= REPEAT_COOLDOWN_S:
-                        send_alert(symbol, price, dp)
-                        last_sent[symbol] = now_t
+
+                # حساب pre/after hours إذا كان الفرق أكبر
+                if "pc" in q and q["pc"] > 0 and price > 0:
+                    ext_dp = ((price - q["pc"]) / q["pc"]) * 100
+                    if abs(ext_dp) > abs(dp):
+                        dp = ext_dp
+
+                if price >= MIN_PRICE and dp >= UP_CHANGE_PCT:
+                    last_t = last_sent.get(s, 0)
+                    if time.time() - last_t >= REPEAT_COOLDOWN_S:
+                        send_alert(s, price, dp)
+                        last_sent[s] = time.time()
                         alerts += 1
                 checked += 1
             except Exception as e:
-                print("Error on", symbol, "->", e)
-        elapsed = time.time() - start_ts
-        sleep_for = max(1.0, CHECK_INTERVAL_SEC - elapsed)
-        print(f"[cycle] checked={checked} alerts={alerts} elapsed={elapsed:.1f}s sleep={sleep_for:.1f}s")
-        time.sleep(sleep_for)
+                print("Error on", s, ":", e)
 
-###############################################################################
-# Flask Keep-alive
-###############################################################################
+        elapsed = time.time() - start
+        print(f"[cycle] checked={checked} alerts={alerts} time={elapsed:.1f}s sleep={CHECK_INTERVAL_SEC - elapsed:.1f}s")
+        time.sleep(max(1, CHECK_INTERVAL_SEC - elapsed))
 
+# ========== Flask Keep-alive ==========
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Auto market alert bot is running ✅"
+    return "Auto Market Alert Bot is Running ✅"
 
 def run_web():
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
 
-###############################################################################
-# التشغيل
-###############################################################################
-
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-    print("==> Service starting...")
-
-    def start_bot():
-        try:
-            print("✅ بدأ البوت — مراقبة الأسهم فوق 20% (بدون penny stocks) 📊")
-            main_loop()
-        except Exception as e:
-            print("❌ خطأ في main_loop:", e)
-
-    threading.Thread(target=start_bot, daemon=True).start()
-    while True:
-        time.sleep(60)
+    print("==> Service Starting...")
+    main_loop()
