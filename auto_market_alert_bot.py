@@ -1,152 +1,102 @@
-# -*- coding: utf-8 -*-
-import os
-import time
-import random
-import threading
 import requests
-import pytz
-from datetime import datetime, timedelta
-import telebot
-from flask import Flask
+import time
+import threading
+from datetime import datetime
+import os
 
-TOKEN = "8316302365:AAHNtXBdma4ggcw5dEwtwxHST8xqvgmJoOU"
-CHANNEL_ID = "@kaaty320"
-FINNHUB_KEY = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
+# === إعدادات عامة ===
+FINNHUB_TOKEN = "d3udq1hr01qil4apjtb0d3udq1hr01qil4apjtbg"
+TELEGRAM_TOKEN = "ضع_توكن_البوت_هنا"
+CHAT_ID = "ضع_رقم_المحادثة_هنا"
 
-MARKET_MICS = {"XNAS", "XNYS", "XASE"}  # NASDAQ / NYSE / AMEX
-UP_CHANGE_PCT = 20
-MIN_PRICE = 1.0
-CHECK_INTERVAL_SEC = 60
-REPEAT_COOLDOWN_S = 15 * 60
-US_TZ = pytz.timezone("US/Eastern")
+# === إعداد قائمة الأسواق المطلوبة ===
+EXCHANGES = ["NASDAQ", "NYSE", "AMEX"]
+PERCENT_LIMIT = 20  # شرط التنبيه فوق 20%
 
-bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
-last_sent, _daily_counts = {}, {}
-
-# ------------------ Finnhub API ------------------
-def fh_get_symbols_us():
-    url = "https://finnhub.io/api/v1/stock/symbol"
+# === دالة إرسال تنبيه إلى التلغرام ===
+def send_telegram_message(message: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message}
     try:
-        r = requests.get(url, params={"exchange": "US", "token": FINNHUB_KEY}, timeout=25)
-        r.raise_for_status()
-        data = r.json()
-        syms = [x["symbol"] for x in data if (x.get("mic") or "").upper() in MARKET_MICS]
-        print(f"[INIT] Loaded {len(syms)} total symbols.")
-        return random.sample(syms, 200)
+        requests.post(url, json=payload)
     except Exception as e:
-        print("fh_get_symbols_us error:", e)
-        return ["AAPL", "TSLA", "NVDA", "AMZN"]
+        print(f"[Telegram Error] {e}")
 
-def fh_quote(symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_KEY}"
-    r = requests.get(url, timeout=15)
-    r.raise_for_status()
-    return r.json()
-
-def fh_last_news(symbol):
-    to_dt = datetime.now(datetime.UTC).date()
-    from_dt = to_dt - timedelta(days=3)
-    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={from_dt}&to={to_dt}&token={FINNHUB_KEY}"
+# === دالة فحص السهم ===
+def check_symbol(symbol):
+    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_TOKEN}"
     try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        if data:
-            latest = max(data, key=lambda x: x.get("datetime", 0))
-            return latest.get("headline", "بدون خبر")
-        return "بدون خبر"
-    except Exception:
-        return "بدون خبر"
+        response = requests.get(url)
+        data = response.json()
 
-# ------------------ التنبيهات ------------------
-def fmt_us_time():
-    return datetime.now(US_TZ).strftime("%I:%M:%S %p")
+        if "c" not in data or "pc" not in data:
+            return None
 
-def send_alert(symbol, price, dp):
-    today = datetime.utcnow().date().isoformat()
-    key = f"{symbol}:{today}"
-    _daily_counts[key] = _daily_counts.get(key, 0) + 1
-    news_text = fh_last_news(symbol)
-    msg = (
-        f"🚀 <b>{symbol}</b>\n"
-        f"▫️ الارتفاع: <b>{dp:+.2f}%</b>\n"
-        f"▫️ السعر: <b>${price:.2f}</b>\n"
-        f"▫️ عدد التنبيهات اليوم: {_daily_counts[key]}\n"
-        f"▫️ الخبر: {news_text}\n"
-        f"⏰ التوقيت الأمريكي: {fmt_us_time()}"
-    )
-    bot.send_message(CHANNEL_ID, msg)
-    print(f"[ALERT] {symbol} +{dp:.2f}%")
+        current = data["c"]
+        previous = data["pc"]
 
-# ------------------ الحلقة الرئيسية ------------------
+        if previous == 0:
+            return None
+
+        percent_change = ((current - previous) / previous) * 100
+
+        # 🟡 سطر الطباعة التحليلية
+        print(f"[DEBUG] {symbol} => Current: {current} | Prev: {previous} | Change: {percent_change:.2f}%")
+
+        if percent_change > PERCENT_LIMIT:
+            return {
+                "symbol": symbol,
+                "change": percent_change,
+                "current": current
+            }
+
+    except Exception as e:
+        print(f"[Error] {symbol}: {e}")
+    return None
+
+
+# === حلقة التشغيل الرئيسية ===
 def main_loop():
-    print("[SYSTEM] Starting main loop...")
-    syms = fh_get_symbols_us()
-    bot.send_message(CHANNEL_ID, "🟢 بدأ البوت — مراقبة الأسهم فوق 20% (NASDAQ / NYSE / AMEX)")
-    per_cycle = 50
+    print("✅ بدء مراقبة الأسهم (NASDAQ / NYSE / AMEX) فوق 20%")
+
+    # رموز اختبار (يمكنك توسعتها لاحقاً)
+    symbols = ["FRGT", "VSEE", "CODX", "SMX", "OP", "LUNG", "SBEV", "DDD"]
 
     while True:
-        start = time.time()
-        random.shuffle(syms)
-        checked, alerts = 0, 0
+        try:
+            alerts = []
 
-        for s in syms[:per_cycle]:
-            try:
-                q = fh_quote(s)
-                price = q.get("c", 0)
-                dp = q.get("dp", None)
-                if (dp is None or dp == 0) and q.get("pc", 0) > 0:
-                    dp = ((price - q["pc"]) / q["pc"]) * 100
-                if dp and dp >= 10:
-                    print(f"[DEBUG] {s} → {dp:+.2f}% @ {price:.2f}$")
-                if dp and dp >= UP_CHANGE_PCT and price >= MIN_PRICE:
-                    last_t = last_sent.get(s, 0)
-                    if time.time() - last_t >= REPEAT_COOLDOWN_S:
-                        send_alert(s, price, dp)
-                        last_sent[s] = time.time()
-                        alerts += 1
-                checked += 1
-            except Exception as e:
-                print("Error on", s, ":", e)
+            for sym in symbols:
+                result = check_symbol(sym)
+                if result:
+                    alerts.append(result)
 
-        elapsed = time.time() - start
-        print(f"[cycle] checked={checked}, alerts={alerts}, took={elapsed:.1f}s")
-        time.sleep(max(1, CHECK_INTERVAL_SEC - elapsed))
+            print(f"[cycle] checked={len(symbols)} | alerts={len(alerts)} | time={datetime.now().strftime('%H:%M:%S')}")
 
-# ------------------ Flask ------------------
-app = Flask(__name__)
+            # === إرسال التنبيهات ===
+            for alert in alerts:
+                msg = (
+                    f"🚀 سهم {alert['symbol']} ارتفع بنسبة {alert['change']:.2f}%\n"
+                    f"💰 السعر الحالي: ${alert['current']}\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                send_telegram_message(msg)
 
-@app.route("/")
-def index():
-    return "Auto Market Alert Bot is running ✅"
+            # === تأخير بين كل دورة لتجنب الحظر ===
+            time.sleep(30)
 
-def run_web():
-    port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
-# ------------------ التشغيل ------------------
-import threading
-import time
-
-def start_all():
-    print("==> تشغيل Flask ...")
-    threading.Thread(target=run_web, daemon=True).start()
-    time.sleep(3)
-    print("==> تشغيل الحلقة الرئيسية ...")
-    try:
-        threading.Thread(target=main_loop, daemon=True).start()
-        print("==> كل شيء شغال ✅")
-    except Exception as e:
-        print(f"[ERROR] فشل تشغيل الحلقة الرئيسية: {e}")
-
-# ✅ تشغيل تلقائي عند الإقلاع (حتى لو Render تجاهل if __name__ == '__main__')
-start_all()
-
-# حلقة انتظار حتى لا يغلق السيرفر
-while True:
-    time.sleep(30)
+        except Exception as e:
+            print(f"[Loop Error] {e}")
+            time.sleep(60)
 
 
+# === تشغيل البوت في Thread ===
+def start_bot():
+    main_loop()
 
 
-
+if __name__ == "__main__":
+    threading.Thread(target=start_bot, daemon=True).start()
+    print("🌕 البوت شغال حالياً — ينتظر ظهور الأسهم فوق 20% 🚀")
+    while True:
+        time.sleep(100)
